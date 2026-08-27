@@ -1,0 +1,32 @@
+[project]
+name = "my-cad-project"
+version = "0.1.0"
+description = "Parametric designs in build123d"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "cadkit @ git+https://github.com/kosmikko/cadkit@v0.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-xdist>=3",
+    "ocp-vscode>=2.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "slow: whole-model rebuilds; iterate with -m 'not slow'",
+]
+
+[tool.uv]
+package = false
+
+# Local development against a sibling checkout of cadkit. Comment this out (or
+# delete it) to build against the pinned git tag above — uv.lock pins the tag,
+# so the two are reproducible in different ways: the tag for anyone cloning
+# this project, the path override while you are changing cadkit itself.
+[tool.uv.sources]
+cadkit = { path = "../cadkit", editable = true }
