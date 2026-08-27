@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Lint
+        run: uv run ruff check src tests examples
+      - name: Tests
+        run: uv run pytest -q
+      - name: End-to-end export
+        run: |
+          uv run python -m examples.bookshelf
+          uv run python -m examples.enclosure
+          uv run cadkit snapshot
+          uv run cadkit diff

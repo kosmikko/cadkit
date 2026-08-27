@@ -1,0 +1,49 @@
+[project]
+name = "cadkit"
+version = "0.1.0"
+description = "Code-CAD toolkit for build123d: shop drawings, cut lists, printability checks, and an agent verification loop"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+dependencies = [
+    "build123d>=0.10",
+    "pymupdf>=1.27,<1.28",
+    "pymupdf-fonts>=1,<2",
+]
+
+[project.scripts]
+cadkit = "cadkit.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/kosmikko/cadkit"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-xdist>=3",
+    "ruff>=0.6",
+    "ocp-vscode>=2.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cadkit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "examples"]
+pythonpath = ["."]
+markers = [
+    "slow: whole-model rebuilds; skip while iterating with -m 'not slow'",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# Pinned explicitly so CI does not drift with ruff's defaults. Deliberately not
+# enabling B/S/RUF: the lib test files moved here verbatim from the project they
+# were written in, and reformatting them would bury that provenance in churn.
+select = ["E", "F", "I", "UP"]
