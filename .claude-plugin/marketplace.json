@@ -1,0 +1,15 @@
+{
+  "name": "cadkit",
+  "owner": {
+    "name": "Mikko Lehtinen",
+    "url": "https://github.com/kosmikko"
+  },
+  "plugins": [
+    {
+      "name": "cadkit",
+      "source": "./",
+      "description": "Code-CAD with build123d: geometry cheatsheet and verified gotchas, shop drawings and cut lists, FDM printability, and the test-export-diff-look iteration loop.",
+      "version": "0.1.0"
+    }
+  ]
+}
