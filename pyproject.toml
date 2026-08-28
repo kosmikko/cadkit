@@ -1,6 +1,6 @@
 [project]
 name = "cadkit"
-version = "0.1.0"
+version = "0.2.0"
 description = "Code-CAD toolkit for build123d: shop drawings, cut lists, printability checks, and an agent verification loop"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
