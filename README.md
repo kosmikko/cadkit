@@ -79,7 +79,7 @@ The dependency is a git tag, so
 in one edit-test cycle when the repos are checked out as siblings.
 
 ```toml
-dependencies = ["cadkit @ git+https://github.com/kosmikko/cadkit@v0.1.0"]
+dependencies = ["cadkit @ git+https://github.com/kosmikko/cadkit@v0.2.0"]
 
 [tool.uv.sources]  # local dev override; comment out to use the pinned tag
 cadkit = { path = "../cadkit", editable = true }

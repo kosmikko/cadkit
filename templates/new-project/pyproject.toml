@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Parametric designs in build123d"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-    "cadkit @ git+https://github.com/kosmikko/cadkit@v0.1.0",
+    "cadkit @ git+https://github.com/kosmikko/cadkit@v0.2.0",
 ]
 
 [dependency-groups]
