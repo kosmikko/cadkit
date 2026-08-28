@@ -10,7 +10,7 @@ split is what makes ``--only`` and ``--skip-pdf`` possible: the runner can see
 the whole artifact list before writing any of it, so it can filter, report what
 it skipped, and record the geometry in ``<name>_summary.json`` either way.
 
-A design module looks like::
+A design module lives in its project folder's ``cad/`` and looks like::
 
     from cadkit.core import Design, main
 
@@ -45,6 +45,12 @@ from pathlib import Path
 #: Artifact kinds the runner understands. ``--skip-<kind>`` works for each.
 KINDS = ("step", "stl", "svg", "csv", "md", "pdf", "json")
 
+#: Where each kind lands under the output directory. A project folder holds the
+#: output you actually pick up — the shop PDF, the cut list, the STL — at its
+#: root, and files down the subfolders in this map. Kinds absent from the map
+#: stay at the root. Override per design with ``Design(name, layout={...})``.
+LAYOUT = {"svg": "svg", "step": "step"}
+
 
 @dataclass(frozen=True)
 class Artifact:
@@ -73,6 +79,7 @@ class Design:
                 printed lid is modelled flat on the bed and seated on the box;
                 the no-interference tests run against ``seated``.
     ``meta``    anything a test or a plan doc wants echoed into the summary.
+    ``layout``  kind -> subdirectory, defaulting to :data:`LAYOUT`.
     """
 
     name: str
@@ -81,11 +88,20 @@ class Design:
     seated: dict = field(default_factory=dict)
     meta: dict = field(default_factory=dict)
     artifacts: list[Artifact] = field(default_factory=list)
+    layout: dict[str, str] = field(default_factory=lambda: dict(LAYOUT))
 
     # ------------------------------------------------------------- declaring
 
     def add(self, name: str, kind: str, filename: str, write) -> Artifact:
-        """Declare an arbitrary artifact. The convenience methods below wrap this."""
+        """Declare an arbitrary artifact. The convenience methods below wrap this.
+
+        The layout prefix is applied here rather than in each convenience
+        method, so it covers the call sites that pass an explicit ``filename``
+        too — assembly sheets, cut-plan sheets, a fixed-name STEP.
+        """
+        subdir = self.layout.get(kind)
+        if subdir:
+            filename = f"{subdir}/{filename}"
         art = Artifact(name, kind, filename, write)
         self.artifacts.append(art)
         return art
@@ -239,7 +255,9 @@ def export_all(design: Design, outdir="export", *, only=(), skip=(), summary=Tru
         if only and not any(f in art.name or f in art.filename for f in only):
             skipped.append(f"{art.filename} (not in --only)")
             continue
-        art.write(out / art.filename)
+        path = out / art.filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        art.write(path)
         written.append(art.filename)
     if summary:
         path = out / f"{design.name}_summary.json"
@@ -273,10 +291,17 @@ def probe(design: Design, expr: str):
     return eval(expr, scope)  # a developer tool: the expression is typed by the developer
 
 
-def main(build: Callable[[], Design], argv=None) -> Design:
-    """Entry point for ``python -m designs.<name>``. Returns the built design."""
+def main(build: Callable[[], Design], argv=None, *, outdir: str = ".") -> Design:
+    """Entry point for ``python cad/<name>.py``. Returns the built design.
+
+    ``outdir`` defaults to the current directory because a project folder *is*
+    its export directory: run the design from the folder that holds its plan
+    doc and the artifacts land beside it, sorted into subfolders by
+    :data:`LAYOUT`.
+    """
     parser = argparse.ArgumentParser(description=(build.__doc__ or "export a design").strip())
-    parser.add_argument("--outdir", default="export", help="output directory (default: export)")
+    parser.add_argument("--outdir", default=outdir,
+                        help=f"output directory (default: {outdir})")
     parser.add_argument("--only", action="append", default=[], metavar="SUBSTR",
                         help="only artifacts matching this substring; repeatable")
     parser.add_argument("--no-summary", action="store_true",

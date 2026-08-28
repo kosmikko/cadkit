@@ -90,4 +90,6 @@ def build() -> Design:
 
 
 if __name__ == "__main__":
-    main(build)
+    # cadkit's own examples are library demos, not project folders, so they
+    # keep the classic export/ directory rather than exporting into the repo.
+    main(build, outdir="export")

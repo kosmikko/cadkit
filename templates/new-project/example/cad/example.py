@@ -3,6 +3,10 @@
 The shape of a design module: parameters as constants at the top so a
 dimension change is a one-line edit; `build()` returning a `Design` that
 declares its artifacts; `main(build)` at the bottom so the module is runnable.
+
+Run it from the project folder, not from here:
+
+    cd example && uv run python cad/example.py
 """
 
 from cadkit.core import Design, main

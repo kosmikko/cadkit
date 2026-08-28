@@ -12,10 +12,13 @@ did not change.
 
 The loop, per edit:
 
+Run it from the project folder — the one holding the plan doc, `cad/` and
+the exported output:
+
 ```bash
-uv run pytest -q tests/test_<design>.py      # 1. scoped tests
-uv run python -m designs.<name> --only <part>  # 2. scoped export
-uv run cadkit diff                           # 3. what actually changed
+uv run pytest -q cad/tests/test_<design>.py       # 1. scoped tests
+uv run python cad/<name>.py --only <part>         # 2. scoped export
+uv run cadkit diff                                # 3. what actually changed
 # 4. look at ONLY the PNGs the diff names
 ```
 
@@ -24,7 +27,8 @@ Then once, before claiming done: full suite, full export, look at everything,
 
 ## 1. Ask the model, don't grep the source
 
-Every export writes `export/<name>_summary.json`: per-part bboxes, sizes,
+Every export writes `<name>_summary.json` at the project root: per-part
+bboxes, sizes,
 centres, volumes, the cut list, and the artifact inventory. Read that to
 answer "how long is rafter_3 now?" instead of rereading a 3000-line module.
 
@@ -32,8 +36,8 @@ For anything the summary does not cover, use `probe` rather than a
 quoting-fragile `python -c` one-liner:
 
 ```bash
-uv run cadkit probe designs.shelter "placed['rafter_1'].bounding_box().size.Z"
-uv run cadkit probe designs.shelter "(placed['a'] & placed['b']).volume"
+uv run cadkit probe shelter "placed['rafter_1'].bounding_box().size.Z"   # from cad/
+uv run cadkit probe shelter "(placed['a'] & placed['b']).volume"
 ```
 
 `placed`, `parts`, `seated`, `design` and the whole build123d namespace are in
@@ -43,9 +47,9 @@ because it comes from the model rather than the files.
 ## 2. Scope the export
 
 ```bash
-uv run python -m designs.<name> --only side      # just the parts that matter
-uv run python -m designs.<name> --skip-pdf       # PDFs are the slow artifact
-uv run python -m designs.<name> --skip-step --skip-csv
+uv run python cad/<name>.py --only side      # just the parts that matter
+uv run python cad/<name>.py --skip-pdf       # PDFs are the slow artifact
+uv run python cad/<name>.py --skip-step --skip-csv
 ```
 
 The runner prints what it skipped and why, so a scoped export never quietly
@@ -56,11 +60,12 @@ The point is not the seconds saved on the export — it is scoping the
 
 ## 3. Diff-scoped inspection — don't re-look at what didn't change
 
-`cadkit diff` keeps golden PNG renders of everything in `export/` and reports
-what an edit actually altered. Run from inside the project directory:
+`cadkit diff` keeps golden PNG renders of every `.svg` and `.pdf` in the
+project folder — `svg/` included — and reports what an edit actually altered.
+Run from inside the project folder:
 
 ```bash
-uv run cadkit snapshot   # accept current export/ as the baseline
+uv run cadkit snapshot   # accept the current output as the baseline
 uv run cadkit diff       # report what changed since the baseline
 ```
 
@@ -81,7 +86,7 @@ from an accepted baseline.
 Render on macOS:
 
 ```bash
-qlmanage -t -s 1000 -o <scratch> export/thing.svg   # then read the PNG
+qlmanage -t -s 1000 -o <scratch> svg/thing.svg   # then read the PNG
 ```
 
 **qlmanage square-crops non-square sheets** — for tall or wide sheets, split
@@ -108,7 +113,7 @@ Prefer writing one over re-looking at the same page a third time.
 
 ## Per-design notes
 
-A design with real history keeps it in `designs/<name>.NOTES.md` next to the
+A design with real history keeps it in `cad/NOTES.md` next to the
 module — artifact inventory, decisions worth keeping, gotchas, and its
 render-and-inspect checklist. **Read that file in full before editing the
 design or its tests**, and record new design-specific lessons there rather

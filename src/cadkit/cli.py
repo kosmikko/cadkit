@@ -1,8 +1,9 @@
 """The ``cadkit`` console script: snapshot, diff, probe, export.
 
-Run from inside a project directory — the one that holds ``designs/`` and
-``export/``. Before cadkit this was ``uv run python ../tools/visual_diff.py``,
-a relative path that only worked from a sibling directory.
+Run from inside a project folder — the one that holds the plan doc, ``cad/``
+and the exported artifacts. Before cadkit this was
+``uv run python ../tools/visual_diff.py``, a relative path that only worked
+from a sibling directory.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from pathlib import Path
 
 from cadkit import verify
 
-EXPORT = Path("export")
+EXPORT = Path(".")  # the project folder is the export directory
 GOLDEN = Path(".golden")
 
 
@@ -26,8 +27,8 @@ def _load_design(module_name: str):
         module = importlib.import_module(module_name)
     except ModuleNotFoundError as error:
         raise SystemExit(
-            f"cannot import {module_name!r} ({error}) — run from the project directory, "
-            f"and name the module as you would import it, e.g. designs.bookshelf"
+            f"cannot import {module_name!r} ({error}) — run from the project's cad/ "
+            f"directory, and name the module as you would import it, e.g. arvi_desk"
         ) from error
     if not hasattr(module, "build"):
         raise SystemExit(f"{module_name} has no build() — not a design module")
@@ -45,18 +46,21 @@ def main(argv=None) -> int:
     p_diff.add_argument("filters", nargs="*", help="artifact filename substrings")
 
     p_probe = sub.add_parser("probe", help="evaluate an expression against a built design")
-    p_probe.add_argument("module", help="design module, e.g. designs.bookshelf")
+    p_probe.add_argument("module", help="design module, e.g. arvi_desk")
     p_probe.add_argument("expr", help="expression over placed/parts/seated/design")
 
     p_export = sub.add_parser("export", help="run a design module's export")
-    p_export.add_argument("module", help="design module, e.g. designs.bookshelf")
+    p_export.add_argument("module", help="design module, e.g. arvi_desk")
     p_export.add_argument("rest", nargs=argparse.REMAINDER, help="flags passed to the design")
 
     args = parser.parse_args(argv)
 
     if args.cmd in ("snapshot", "diff"):
-        if not EXPORT.is_dir():
-            raise SystemExit(f"no {EXPORT}/ here — run from inside a project directory")
+        if not verify.artifacts(EXPORT, []):
+            raise SystemExit(
+                "no .svg or .pdf here — run from inside a project folder, "
+                "and export it first"
+            )
         if args.cmd == "snapshot":
             verify.snapshot(EXPORT, GOLDEN, args.filters)
         else:

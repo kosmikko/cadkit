@@ -72,9 +72,9 @@ def test_declares_the_expected_artifacts(design):
     """The export runner writes what build() declared — check the declaration."""
     declared = {a.filename: a.kind for a in design.artifacts}
     assert declared == {
-        "bookshelf.step": "step",
+        "step/bookshelf.step": "step",
         "bookshelf_cutlist.csv": "csv",
-        "bookshelf_side.svg": "svg",
-        "bookshelf_shelf.svg": "svg",
-        "bookshelf_exploded.svg": "svg",
+        "svg/bookshelf_side.svg": "svg",
+        "svg/bookshelf_shelf.svg": "svg",
+        "svg/bookshelf_exploded.svg": "svg",
     }

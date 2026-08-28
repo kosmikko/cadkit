@@ -4,8 +4,8 @@ import itertools
 
 import pytest
 from build123d import Compound
-from designs import example
-from designs.example import DEPTH, WIDTH, T
+import example
+from example import DEPTH, WIDTH, T
 
 
 @pytest.fixture(scope="module")
