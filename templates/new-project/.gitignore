@@ -3,6 +3,5 @@ __pycache__/
 .venv/
 .pytest_cache/
 .ruff_cache/
-export/
 .golden/
 .DS_Store

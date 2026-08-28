@@ -86,4 +86,6 @@ def report(design: Design, outdir="export") -> None:
 
 
 if __name__ == "__main__":
-    report(main(build))
+    # cadkit's own examples are library demos, not project folders, so they
+    # keep the classic export/ directory rather than exporting into the repo.
+    report(main(build, outdir="export"))

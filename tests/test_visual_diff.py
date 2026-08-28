@@ -10,8 +10,9 @@ SVG = (
 
 
 def write_svg(export, x=10, name="part.svg", extra=""):
-    export.mkdir(exist_ok=True)
-    (export / name).write_text(SVG.format(x=x, extra=extra))
+    path = export / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(SVG.format(x=x, extra=extra))
 
 
 def test_snapshot_then_diff_is_clean(tmp_path):
@@ -62,3 +63,32 @@ def test_name_filters_scope_both_commands(tmp_path):
     write_svg(export, name="rack.svg", x=30)
     report = "\n".join(visual_diff.diff(export, golden, ["desk"]))
     assert "desk.svg" in report and "rack.svg" not in report
+
+
+def test_sheets_in_subfolders_are_found_and_diffed(tmp_path):
+    """The project folder is the export dir now, and its sheets live in svg/."""
+    export, golden = tmp_path / "project", tmp_path / "project" / ".golden"
+    write_svg(export, name="svg/part.svg")
+    write_svg(export, name="package.svg")  # a root-level artifact still counts
+    assert [p.name for p in visual_diff.artifacts(export, [])] == [
+        "package.svg", "part.svg",
+    ]
+
+    visual_diff.snapshot(export, golden, [])
+    assert visual_diff.diff(export, golden, []) == ["2 artifact(s) unchanged"]
+
+    write_svg(export, name="svg/part.svg", x=30)
+    report = visual_diff.diff(export, golden, [])
+    assert any(r.startswith("CHANGED part.svg: page 1 (") for r in report)
+    assert "1 artifact(s) unchanged" in report
+
+
+def test_the_baseline_does_not_diff_itself(tmp_path):
+    """.golden/ holds PNGs, but _diff/ holds rendered SVG copies — skip dot-dirs."""
+    export, golden = tmp_path / "project", tmp_path / "project" / ".golden"
+    write_svg(export, name="svg/part.svg")
+    visual_diff.snapshot(export, golden, [])
+    # a stray SVG under .golden/ must not be picked up as an artifact
+    write_svg(golden, name="stray.svg")
+    assert [p.name for p in visual_diff.artifacts(export, [])] == ["part.svg"]
+    assert visual_diff.diff(export, golden, []) == ["1 artifact(s) unchanged"]

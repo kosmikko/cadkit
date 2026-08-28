@@ -57,7 +57,24 @@ check runs as an assertion in `examples/tests/test_export_pipeline.py`.
 
 ## Use it in a project
 
-Copy `templates/new-project/` and rename it. The dependency is a git tag, so
+Copy `templates/new-project/` and rename it. It sets up one folder per thing
+you are building — plan doc, `cad/` sources and exported output together —
+with a root `conftest.py` that puts every project's `cad/` on `sys.path`, so
+`uv run pytest` from the top runs every suite:
+
+```
+example/
+  example-plan.md  example_cutlist.csv  example_summary.json
+  cad/example.py  cad/tests/test_example.py
+  svg/  step/  .golden/
+```
+
+The project folder *is* the export directory: `Design` sorts artifacts into
+subfolders by kind (`LAYOUT = {"svg": "svg", "step": "step"}`, overridable via
+`Design(name, layout=...)`), leaving the shop PDF, the cut list and the STL —
+the things you actually pick up — at the root.
+
+The dependency is a git tag, so
 `uv.lock` pins it; the path override lets you iterate on cadkit and the design
 in one edit-test cycle when the repos are checked out as siblings.
 
@@ -101,10 +118,12 @@ if __name__ == "__main__":
 ## The CLI
 
 ```bash
-uv run cadkit snapshot            # accept current export/ as the visual baseline
+# from inside a project folder
+uv run cadkit snapshot            # accept the current output as the visual baseline
 uv run cadkit diff                # report which pages actually changed
-uv run cadkit probe designs.shelf "placed['side'].volume"
-uv run cadkit export designs.shelf --only side --skip-pdf
+# from inside its cad/
+uv run cadkit probe shelf "placed['side'].volume"
+uv run cadkit export shelf --only side --skip-pdf --outdir ..
 ```
 
 ## The plugin

@@ -1,4 +1,4 @@
-"""Golden-PNG visual diff for a project's export/ directory.
+"""Golden-PNG visual diff for a project folder's exported artifacts.
 
 Scopes the agent's visual inspection to what a change actually altered:
 keep a baseline render of every visual artifact (SVG sheets, PDF pages),
@@ -6,13 +6,15 @@ then after an edit report which artifacts/pages changed — only those need
 to be looked at with vision. Full every-page inspection is still owed once
 before a final "done" claim.
 
-Run from inside a project directory (the one holding export/):
+Run from inside a project folder (the one holding the plan doc and the
+exported artifacts):
 
     uv run cadkit snapshot [name-filter ...]
     uv run cadkit diff     [name-filter ...]
 
-`snapshot` renders export/*.svg and export/*.pdf into .golden/ and records
-a content hash per artifact. `diff` re-checks: artifacts whose file hash
+`snapshot` renders every .svg and .pdf under the folder — including the ones
+in svg/ — into .golden/ and records a content hash per artifact. `diff`
+re-checks: artifacts whose file hash
 matches the baseline are skipped without rendering; the rest are rendered
 and compared pixel-for-pixel per page. Changed pages get the current
 render plus a red-overlay diff written to .golden/_diff/ — read those PNGs,
@@ -31,7 +33,7 @@ from pathlib import Path
 
 import pymupdf
 
-EXPORT = Path("export")
+EXPORT = Path(".")
 GOLDEN = Path(".golden")
 DIFF_DIR = GOLDEN / "_diff"
 MANIFEST = GOLDEN / "manifest.json"
@@ -39,8 +41,18 @@ TARGET_PX = 1000  # long edge of rendered pages; keep stable or re-snapshot
 
 
 def artifacts(export_dir: Path, filters: list[str]) -> list[Path]:
+    """Every visual artifact under `export_dir`, at any depth.
+
+    Recursive because a project folder sorts its output into subfolders
+    (`svg/`, `step/`). Dot-directories are skipped so `.golden/` does not
+    diff its own baseline renders. Filenames stay unique inside one project
+    folder, so the manifest can keep keying on ``path.name``.
+    """
     files = sorted(
-        p for p in export_dir.iterdir() if p.suffix.lower() in (".svg", ".pdf")
+        p
+        for p in export_dir.rglob("*")
+        if p.suffix.lower() in (".svg", ".pdf")
+        and not any(part.startswith(".") for part in p.relative_to(export_dir).parts)
     )
     if filters:
         files = [p for p in files if any(f in p.name for f in filters)]

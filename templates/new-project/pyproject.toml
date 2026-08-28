@@ -14,9 +14,9 @@ dev = [
     "ocp-vscode>=2.6",
 ]
 
+# No testpaths: pytest collects from the root, picking up every project's
+# cad/tests/. conftest.py at the root puts each project's cad/ on sys.path.
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["."]
 markers = [
     "slow: whole-model rebuilds; iterate with -m 'not slow'",
 ]
