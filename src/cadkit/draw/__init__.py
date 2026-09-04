@@ -18,6 +18,7 @@ from cadkit.draw.drawing import (
     project_edges,
     render_exploded,
     render_part_drawing,
+    sheet_text_scale,
     view_basis,
     view_map,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "rect_mm",
     "render_exploded",
     "render_part_drawing",
+    "sheet_text_scale",
     "view_basis",
     "view_map",
 ]

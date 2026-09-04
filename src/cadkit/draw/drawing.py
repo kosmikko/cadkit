@@ -40,6 +40,22 @@ VIEW_DIRS = {
 VIEW_UPS = {"top": Vector(0, 1, 0), "bottom": Vector(0, -1, 0)}
 
 
+def sheet_text_scale(span: float, panel_mm: float, target_mm: float = 2.6) -> float:
+    """Text multiplier that lands ~`target_mm` of type on the printed page.
+
+    ``render_part_drawing`` draws its annotations at :data:`TEXT_SIZE` mm *of
+    model*, and a sheet placed in a PDF panel is then scaled to fit it. A
+    drawing of a 1 500 mm rack in a 184 mm panel therefore prints its labels at
+    a third of a millimetre unless the type is sized from that same ratio.
+
+    `span` is the drawing's largest extent in model mm, `panel_mm` the printed
+    width of the panel it lands in.
+    """
+    if not (span > 0 and panel_mm > 0 and target_mm > 0):
+        raise ValueError("span, panel_mm and target_mm must all be positive")
+    return span / panel_mm * target_mm / TEXT_SIZE
+
+
 def view_direction(view) -> Vector:
     """Camera direction for a named view, or an explicit direction vector."""
     return VIEW_DIRS[view] if isinstance(view, str) else Vector(view)
@@ -209,6 +225,20 @@ EXPLODED_LABEL_MAX = 64.0
 EXPLODED_LABEL_SCALE = 250.0
 EXPLODED_COLUMN_GAP = 12.0
 EXPLODED_ROW_GAP = 1.5
+#: layout="near" scoring, all in label sizes: a label joins its group's
+#: cluster if that costs less than this much extra leader; lining up with a
+#: clustered label is worth a little more; every other part and every earlier
+#: leader the leader crosses costs this much. CHAR_W matches SvgSheet._bbox.
+EXPLODED_CHAR_W = 0.62
+EXPLODED_NEAR_COHESION = 6.0
+EXPLODED_NEAR_ALIGN = 1.5
+EXPLODED_NEAR_CROSS_PART = 2.0
+EXPLODED_NEAR_CROSS_LEADER = 1.5
+EXPLODED_NEAR_CANDIDATES = 48  # nearest usable slots scored per label
+EXPLODED_NEAR_POOL = 60  # nearest slots counted to rank how boxed-in a label is
+EXPLODED_NEAR_PASSES = 8  # improvement rounds of moves and swaps
+EXPLODED_NEAR_MIN_GAIN = 0.5  # in sizes; smaller gains are not worth the churn
+EXPLODED_NEAR_REACH = 2  # lattice extends this many label pitches past the drawing
 
 
 class SvgSheet:
@@ -767,6 +797,308 @@ def _leader_anchor(edges, label_point):
     return best[1]
 
 
+def _convex_hull(points):
+    """Andrew's monotone chain; a part's projected bbox corners → its outline."""
+    pts = sorted(set(points))
+    if len(pts) <= 2:
+        return pts
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower = []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return lower[:-1] + upper[:-1]
+
+
+def _orient(a, b, c):
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _segments_cross(p1, p2, q1, q2):
+    """Closed-segment intersection; touching counts."""
+    d1, d2 = _orient(q1, q2, p1), _orient(q1, q2, p2)
+    d3, d4 = _orient(p1, p2, q1), _orient(p1, p2, q2)
+    if d1 * d2 > 0 or d3 * d4 > 0:
+        return False
+    if d1 == d2 == d3 == d4 == 0:  # collinear: overlap iff bboxes overlap
+        return (
+            min(p1[0], p2[0]) <= max(q1[0], q2[0])
+            and min(q1[0], q2[0]) <= max(p1[0], p2[0])
+            and min(p1[1], p2[1]) <= max(q1[1], q2[1])
+            and min(q1[1], q2[1]) <= max(p1[1], p2[1])
+        )
+    return True
+
+
+def _point_in_polygon(pt, poly):
+    x, y = pt
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        (x1, y1), (x2, y2) = poly[i], poly[(i + 1) % n]
+        if (y1 > y) != (y2 > y):
+            if x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+                inside = not inside
+    return inside
+
+
+def _poly_edges(poly):
+    return [(poly[i], poly[(i + 1) % len(poly)]) for i in range(len(poly))]
+
+
+def _rect_corners(rect):
+    left, bottom, right, top = rect
+    return [(left, bottom), (right, bottom), (right, top), (left, top)]
+
+
+def _inflate(rect, by):
+    left, bottom, right, top = rect
+    return (left - by, bottom - by, right + by, top + by)
+
+
+def _rects_overlap(a, b):
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def _point_in_rect(pt, rect):
+    return rect[0] <= pt[0] <= rect[2] and rect[1] <= pt[1] <= rect[3]
+
+
+def _rect_intersects_polygon(rect, poly, poly_bbox):
+    if not _rects_overlap(rect, poly_bbox):
+        return False
+    if any(_point_in_rect(p, rect) for p in poly):
+        return True
+    if any(_point_in_polygon(c, poly) for c in _rect_corners(rect)):
+        return True
+    return any(
+        _segments_cross(a, b, c, d)
+        for a, b in _poly_edges(_rect_corners(rect))
+        for c, d in _poly_edges(poly)
+    )
+
+
+def _segment_intersects_rect(a, b, rect):
+    if _point_in_rect(a, rect) or _point_in_rect(b, rect):
+        return True
+    return any(
+        _segments_cross(a, b, c, d) for c, d in _poly_edges(_rect_corners(rect))
+    )
+
+
+def _segment_crosses_polygon(a, b, poly, poly_bbox):
+    seg_box = (min(a[0], b[0]), min(a[1], b[1]), max(a[0], b[0]), max(a[1], b[1]))
+    if not _rects_overlap(_inflate(seg_box, 1e-9), poly_bbox):
+        return False
+    if _point_in_polygon(a, poly) or _point_in_polygon(b, poly):
+        return True
+    return any(_segments_cross(a, b, c, d) for c, d in _poly_edges(poly))
+
+
+def _bbox_of(points):
+    xs = [x for x, _ in points]
+    ys = [y for _, y in points]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _label_extent(lines, size):
+    """(width, height) of a label's text block, on the sheet's own metrics."""
+    width = EXPLODED_CHAR_W * size * max(len(line) for line in lines)
+    height = (1.2 + 1.3 * (len(lines) - 1)) * size
+    return width, height
+
+
+def _near_label_layout(labelled, part_corners, part_edges, drawn, size, groups):
+    """Place each label in free space next to its part, clustered by group.
+
+    Candidate slots lie on a half-pitch lattice over the drawing and
+    EXPLODED_NEAR_REACH label pitches beyond it. Labels are placed most
+    constrained first — fewest usable slots among their nearest — so a part
+    boxed in by the assembly is labelled before a free-standing one takes
+    its slot. A slot is out if its rectangle (plus clearance)
+    touches any part's projected outline, an earlier label, or an earlier
+    leader, or if its own leader would run through an earlier label. What is
+    left is scored in label sizes: the leader's length, a penalty for every
+    other part and every earlier leader it crosses, and a bonus for sitting
+    next to — and lined up with — an already-placed label of the same group.
+    That bonus is what turns "near its part" into "one component's labels
+    together", and it is worth about six sizes of leader.
+
+    Returns [(pname, lines, rect, side, leader_start, leader_end)], where
+    `side` is the rectangle edge the leader leaves from.
+    """
+    gap = size
+    hulls = {
+        pname: _convex_hull(list(corners.values()))
+        for pname, corners in part_corners.items()
+    }
+    hull_boxes = {pname: _bbox_of(hull) for pname, hull in hulls.items()}
+    extents = {pname: _label_extent(lines, size) for pname, lines in labelled}
+    slot_w = max(w for w, _ in extents.values())
+    slot_h = max(h for _, h in extents.values())
+
+    hx0, hy0, hx1, hy1 = _bbox_of([c for b in hull_boxes.values()
+                                   for c in _rect_corners(b)])
+    x0, y0 = min(drawn[0], hx0), min(drawn[1], hy0)
+    x1, y1 = max(drawn[2], hx1), max(drawn[3], hy1)
+    pitch_x, pitch_y = (slot_w + gap) / 2, (slot_h + gap) / 2
+    slots = []
+    left = x0 - EXPLODED_NEAR_REACH * (slot_w + gap)
+    while left <= x1 + EXPLODED_NEAR_REACH * (slot_w + gap) - slot_w:
+        bottom = y0 - EXPLODED_NEAR_REACH * (slot_h + gap)
+        while bottom <= y1 + EXPLODED_NEAR_REACH * (slot_h + gap) - slot_h:
+            rect = (left, bottom, left + slot_w, bottom + slot_h)
+            padded = _inflate(rect, gap / 2)
+            if not any(
+                _rect_intersects_polygon(padded, hulls[p], hull_boxes[p])
+                for p in hulls
+            ):
+                slots.append(rect)
+            bottom += pitch_y
+        left += pitch_x
+
+    def leader_for(pname, rect):
+        """Start on the rect edge facing the part, end on the part's wireframe."""
+        left, bottom, right, top = rect
+        cx, cy = (left + right) / 2, (bottom + top) / 2
+        probe = _leader_anchor(part_edges[pname], (cx, cy))
+        _, height = extents[pname]
+        name_y = top - (slot_h - height) / 2 - 0.9 * size + 0.35 * size
+        if probe[0] < left:
+            side, start = "left", (left, name_y)
+        elif probe[0] > right:
+            side, start = "right", (right, name_y)
+        elif probe[1] > top:
+            side, start = "top", (cx, top)
+        else:
+            side, start = "bottom", (cx, bottom)
+        return rect, side, start, _leader_anchor(part_edges[pname], start)
+
+    # Every label's slots, nearest leader first.
+    pools = {}
+    for pname, _ in labelled:
+        pool = [leader_for(pname, rect) for rect in slots]
+        pool.sort(key=lambda c: (math.dist(c[2], c[3]), c[0]))
+        pools[pname] = pool
+
+    placement = {}  # pname -> (rect, side, start, end)
+
+    def usable(candidate, others):
+        """Hard rules against the labels in `others`: rects keep a gap (the
+        lattice pitch leaves exactly one), a leader only has to miss the text
+        itself, by a quarter gap."""
+        rect, _, start, end = candidate
+        near = _inflate(rect, 0.99 * gap)
+        clear = _inflate(rect, gap / 4)
+        for other_rect, _, a, b in others.values():
+            if _rects_overlap(near, other_rect):
+                return False
+            if _segment_intersects_rect(a, b, clear):
+                return False
+            if _segment_intersects_rect(start, end, _inflate(other_rect, gap / 4)):
+                return False
+        return True
+
+    def cost(pname, candidate, others):
+        """Soft score in label sizes; lower is better."""
+        rect, _, start, end = candidate
+        score = math.dist(start, end) / size
+        near = [o[0] for p, o in others.items() if groups[p] == groups[pname]]
+        if any(_rects_overlap(_inflate(rect, 0.6 * gap), _inflate(o, 0.6 * gap))
+               for o in near):
+            score -= EXPLODED_NEAR_COHESION
+        if any(abs(rect[0] - o[0]) < 1e-6 or abs(rect[1] - o[1]) < 1e-6
+               for o in near):
+            score -= EXPLODED_NEAR_ALIGN
+        score += EXPLODED_NEAR_CROSS_PART * sum(
+            _segment_crosses_polygon(start, end, hulls[p], hull_boxes[p])
+            for p in hulls if p != pname
+        )
+        score += EXPLODED_NEAR_CROSS_LEADER * sum(
+            _segments_cross(start, end, a, b) for _, _, a, b in others.values()
+        )
+        return score
+
+    def best_slot(pname, others):
+        """(cost, candidate) of the cheapest of the nearest usable slots."""
+        found = []
+        for candidate in pools[pname]:
+            if usable(candidate, others):
+                found.append((cost(pname, candidate, others), candidate))
+                if len(found) == EXPLODED_NEAR_CANDIDATES:
+                    break
+        if not found:
+            raise ValueError(f"no free space to label {pname!r}")
+        return min(found, key=lambda f: (f[0], f[1][0]))
+
+    # Greedy, most constrained first: at each step the label with the fewest
+    # usable slots among its nearest is placed, so a part boxed in by the
+    # assembly gets its one good slot before a free-standing part takes it.
+    remaining = [pname for pname, _ in labelled]
+    while remaining:
+        pname = min(
+            remaining,
+            key=lambda p: (
+                sum(usable(c, placement) for c in pools[p][:EXPLODED_NEAR_POOL]),
+                remaining.index(p),
+            ),
+        )
+        remaining.remove(pname)
+        placement[pname] = best_slot(pname, placement)[1]
+
+    # Then improve: greedy order still strands the odd label far from its
+    # part once its neighbourhood is full. Take the labels worst first and
+    # move each to a better slot, or swap it with another label when both
+    # come out ahead, until nothing improves.
+    def without(*names):
+        return {p: c for p, c in placement.items() if p not in names}
+
+    for _ in range(EXPLODED_NEAR_PASSES):
+        improved = False
+        worst_first = sorted(
+            placement, key=lambda p: -cost(p, placement[p], without(p))
+        )
+        for pname in worst_first:
+            others = without(pname)
+            current = cost(pname, placement[pname], others)
+            gain, action = EXPLODED_NEAR_MIN_GAIN, None
+            moved_cost, moved = best_slot(pname, others)
+            if current - moved_cost > gain:
+                gain, action = current - moved_cost, {pname: moved}
+            for other in placement:
+                if other == pname:
+                    continue
+                rest = without(pname, other)
+                mine = leader_for(pname, placement[other][0])
+                theirs = leader_for(other, placement[pname][0])
+                if not (usable(mine, rest | {other: theirs})
+                        and usable(theirs, rest | {pname: mine})):
+                    continue
+                before = current + cost(other, placement[other], without(other))
+                after = (cost(pname, mine, rest | {other: theirs})
+                         + cost(other, theirs, rest | {pname: mine}))
+                if before - after > gain:
+                    gain, action = before - after, {pname: mine, other: theirs}
+            if action:
+                placement.update(action)
+                improved = True
+        if not improved:
+            break
+
+    return [
+        (pname, lines, *placement[pname]) for pname, lines in labelled
+    ]
+
+
 def render_exploded(
     placed: dict,
     explode: float,
@@ -774,6 +1106,8 @@ def render_exploded(
     view: str = "iso",
     labels: dict[str, str] | None = None,
     title: str = "exploded view",
+    layout: str = "columns",
+    groups: dict[str, str] | None = None,
 ):
     """Exploded assembly view with part labels.
 
@@ -785,6 +1119,13 @@ def render_exploded(
     dozen leaders into the same stack, and the drawing stops being readable.
     Every placed key must still appear in `labels`, so a typo is still an error
     rather than a silently missing label.
+
+    layout "columns" balances the labels into one column either side of the
+    drawing. layout "near" puts each label in free space next to its part
+    instead, and `groups` — {part name: group name} — clusters the labels of
+    one sub-assembly together; a part left out of `groups` is a group of its
+    own. Use "near" when a long assembly leaves empty paper around its parts
+    that two edge columns cannot reach; see `_near_label_layout`.
     """
     from build123d import Pos
 
@@ -792,6 +1133,14 @@ def render_exploded(
         raise ValueError("placed must contain at least one part")
     if labels is not None and set(labels) != set(placed):
         raise ValueError("labels must match placed keys exactly")
+    if layout not in ("columns", "near"):
+        raise ValueError(f"layout must be 'columns' or 'near', not {layout!r}")
+    if groups is not None and set(groups) - set(placed):
+        raise ValueError(
+            f"groups names parts that are not placed: "
+            f"{sorted(set(groups) - set(placed))}"
+        )
+    label_groups = {pname: pname for pname in placed} | (groups or {})
     display_labels = (
         {pname: pname for pname in placed} if labels is None else labels
     )
@@ -846,6 +1195,49 @@ def render_exploded(
             continue
         cx, cy = to2d(solid.bounding_box().center())
         label_positions.append((pname, cx, cy))
+
+    if layout == "near":
+        # Group order is first appearance; within a group, top down and left
+        # to right, so the first label of a cluster is the one the rest stack
+        # under.
+        order = {}
+        for pname, _, _ in label_positions:
+            order.setdefault(label_groups[pname], len(order))
+        label_positions.sort(
+            key=lambda label: (order[label_groups[label[0]]], -label[2], label[1])
+        )
+        labelled = [
+            (pname, display_labels[pname].split("\n"))
+            for pname, _, _ in label_positions
+        ]
+        arrow_scale = label_size / (TEXT_SIZE * 2)
+        highest_label = y1
+        for pname, lines, rect, side, start, end in _near_label_layout(
+            labelled, part_corners, part_edges, (x0, y0, x1, y1), label_size,
+            label_groups,
+        ):
+            sheet.line(start[0], start[1], end[0], end[1], style="leader")
+            sheet.arrow(end[0], end[1],
+                        math.atan2(end[1] - start[1], end[0] - start[0]),
+                        scale=arrow_scale)
+            left, bottom, right, top = rect
+            _, height = _label_extent(lines, label_size)
+            first_baseline = top - ((top - bottom) - height) / 2 - 0.9 * label_size
+            text_x, anchor = {
+                "left": (left, "start"),
+                "right": (right, "end"),
+                "top": ((left + right) / 2, "middle"),
+                "bottom": ((left + right) / 2, "middle"),
+            }[side]
+            for line_index, line in enumerate(lines):
+                sheet.text(text_x, first_baseline - line_index * label_size * 1.3,
+                           line, size=label_size, anchor=anchor)
+            highest_label = max(highest_label, top)
+        title_size = label_size * 1.3
+        sheet.text((x0 + x1) / 2, highest_label + 2 * title_size, title,
+                   size=title_size)
+        sheet.render(path)
+        return
 
     # Keep labels outside the assembly and balance them into two columns.
     # Sorting by projected x preserves locality; sorting each column by y keeps

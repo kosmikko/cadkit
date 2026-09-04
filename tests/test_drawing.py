@@ -436,6 +436,112 @@ def test_exploded_labels_are_preserved_separated_and_leader_associated(
     assert len(leaders) == len(placed)
 
 
+def _label_rects(root, names):
+    """Bounding rect of each part's label text block, in SVG coords."""
+    rects = {}
+    for node in root.findall("svg:text", SVG_NS):
+        if node.text in names:
+            rects[node.text] = _text_bounds(node)
+    return rects
+
+
+def test_exploded_near_layout_clusters_each_group_beside_its_parts(tmp_path):
+    """Two stacks of boards far apart: with layout="near" each stack's labels
+    sit on its own side of the sheet, clear of every part and of each other,
+    and no leader runs through another label's text."""
+    placed = {}
+    for index in range(4):
+        placed[f"left_board_{index}"] = block(300, 200, 18, at=(0, 0, index * 100))
+        placed[f"right_board_{index}"] = block(300, 200, 18,
+                                              at=(2000, 0, index * 100))
+    groups = {name: name.split("_")[0] for name in placed}
+    labels = {name: f"{name}\n300×200×18" for name in placed}
+    output = tmp_path / "near.svg"
+    drawing.render_exploded(placed, explode=0.3, path=output, view="front",
+                            labels=labels, layout="near", groups=groups)
+
+    root = ElementTree.parse(output).getroot()
+    rects = _label_rects(root, set(placed))
+    assert set(rects) == set(placed)
+    assert all(
+        _rectangles_are_disjoint(first, second)
+        for first, second in combinations(rects.values(), 2)
+    )
+
+    # every label is nearer its own stack than the other one, and the two
+    # groups do not interleave: all left labels are left of all right labels
+    outline = [
+        node for node in root.findall("svg:polyline", SVG_NS)
+        if node.attrib.get("stroke") == "#111"
+    ]
+    xs = sorted(
+        float(point.split(",")[0])
+        for node in outline for point in node.attrib["points"].split()
+    )
+    left_stack_x, right_stack_x = xs[0], xs[-1]
+    for name, (x0, _, x1, _) in rects.items():
+        centre = (x0 + x1) / 2
+        if name.startswith("left"):
+            assert abs(centre - left_stack_x) < abs(centre - right_stack_x)
+        else:
+            assert abs(centre - right_stack_x) < abs(centre - left_stack_x)
+    assert max(r[2] for n, r in rects.items() if n.startswith("left")) < min(
+        r[0] for n, r in rects.items() if n.startswith("right")
+    )
+
+    # a leader per label, and none of them run through any label's text
+    leaders = [
+        [tuple(map(float, point.split(","))) for point in node.attrib["points"].split()]
+        for node in root.findall("svg:polyline", SVG_NS)
+        if node.attrib.get("stroke") == "#555"
+    ]
+    assert len(leaders) == len(placed)
+    for a, b in leaders:
+        for rect in rects.values():
+            inner = (rect[0] + 0.5, rect[1] + 0.5, rect[2] - 0.5, rect[3] - 0.5)
+            touches_own = (
+                abs(a[0] - rect[0]) < 0.6 or abs(a[0] - rect[2]) < 0.6
+                or abs(a[1] - rect[1]) < 0.6 or abs(a[1] - rect[3]) < 0.6
+            )
+            if not touches_own:
+                assert not drawing._segment_intersects_rect(a, b, inner)
+
+
+def test_exploded_near_layout_rejects_bad_arguments(tmp_path):
+    placed = {"a": block(10, 10, 10), "b": block(10, 10, 10, at=(30, 0, 0))}
+    with pytest.raises(ValueError, match="layout"):
+        drawing.render_exploded(placed, explode=0.5, path=tmp_path / "x.svg",
+                                layout="spiral")
+    with pytest.raises(ValueError, match="not placed"):
+        drawing.render_exploded(placed, explode=0.5, path=tmp_path / "x.svg",
+                                layout="near", groups={"c": "g"})
+    # a part left out of groups is a group of its own, not an error
+    drawing.render_exploded(placed, explode=0.5, path=tmp_path / "ok.svg",
+                            layout="near", groups={"a": "g"})
+    assert (tmp_path / "ok.svg").read_text().startswith("<svg")
+
+
+def test_exploded_near_layout_geometry_helpers():
+    square = [(0, 0), (10, 0), (10, 10), (0, 10)]
+    assert drawing._convex_hull([(0, 0), (10, 0), (5, 5), (10, 10), (0, 10)]) == [
+        (0, 0), (10, 0), (10, 10), (0, 10)
+    ]
+    assert drawing._point_in_polygon((5, 5), square)
+    assert not drawing._point_in_polygon((15, 5), square)
+    assert drawing._segments_cross((0, 0), (10, 10), (0, 10), (10, 0))
+    assert not drawing._segments_cross((0, 0), (1, 1), (2, 2), (3, 3))
+    assert drawing._segments_cross((0, 0), (2, 2), (1, 1), (3, 3))  # collinear overlap
+    box = (0, 0, 10, 10)
+    assert drawing._rect_intersects_polygon((5, 5, 15, 15), square, box)
+    assert drawing._rect_intersects_polygon((-5, -5, 15, 15), square, box)  # engulfs
+    assert drawing._rect_intersects_polygon((2, 2, 4, 4), square, box)  # inside
+    assert not drawing._rect_intersects_polygon((11, 11, 15, 15), square, box)
+    assert drawing._segment_intersects_rect((-5, 5), (15, 5), (0, 0, 10, 10))
+    assert not drawing._segment_intersects_rect((-5, 15), (15, 15), (0, 0, 10, 10))
+    assert drawing._segment_crosses_polygon((-5, 5), (15, 5), square, box)
+    assert not drawing._segment_crosses_polygon((-5, 15), (15, 15), square, box)
+
+
 def test_exploded_render_uses_localized_labels_and_title(tmp_path, monkeypatch):
     placed = {
         "roof_frame": block(10, 12, 14),
@@ -778,3 +884,25 @@ def test_detail_dimensions_must_be_aligned_and_carry_their_real_size(tmp_path):
     # ...and an unlabelled one would print the magnified number as the size
     with pytest.raises(ValueError, match="label"):
         render(Dim("aligned", (0, 0), (5, 0), -4))
+
+
+def test_sheet_text_scale_lands_the_target_type_size_on_the_page():
+    """A sheet scaled into a PDF panel needs its type sized from that ratio.
+
+    The multiplier is what `render_part_drawing` applies to TEXT_SIZE, so
+    `TEXT_SIZE * scale` millimetres of model, shrunk by panel/span, must come
+    out at the target millimetres of paper.
+    """
+    span, panel, target = 1500.0, 184.0, 2.6
+    scale = drawing.sheet_text_scale(span, panel, target)
+    assert TEXT_SIZE * scale * panel / span == pytest.approx(target)
+    # 1:1 into its panel is the identity case: 3.5 mm of model prints 2.6 mm.
+    assert drawing.sheet_text_scale(184.0, 184.0) == pytest.approx(2.6 / TEXT_SIZE)
+
+
+@pytest.mark.parametrize(
+    "args", [(0, 184.0), (-1500.0, 184.0), (1500.0, 0), (1500.0, -184.0)]
+)
+def test_sheet_text_scale_rejects_non_positive_inputs(args):
+    with pytest.raises(ValueError, match="must all be positive"):
+        drawing.sheet_text_scale(*args)

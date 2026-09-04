@@ -73,6 +73,16 @@ than guessing.
   `build123d`'s `references/hlr.md` before assuming `iso` works.
 - A multi-row callout runs **downward** from its anchor, which is why the
   caption is cleared past its last row.
+- **Two edge columns stop working past about twenty labels on a long
+  assembly** — the columns outgrow the drawing and every leader crosses it.
+  `render_exploded(..., layout="near", groups={part: group})` places each
+  label on a lattice slot in the free space next to its part instead, most
+  constrained part first, then moves and swaps labels until no leader
+  shortens; `groups` clusters one sub-assembly's labels together. Labels
+  never overlap a part's outline or another label and a leader never runs
+  through text; a leader crossing another part or another leader only costs
+  score. The default `layout="columns"` is unchanged and right for a sheet
+  of a dozen parts.
 
 ## Cut lists and nesting
 
